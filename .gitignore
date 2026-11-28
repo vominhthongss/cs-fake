@@ -8,7 +8,6 @@ android/build/
 *.jks
 
 # Build outputs
-build/
 dist/
 
 # OS & logs
