@@ -603,8 +603,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif kc == KEY_R:
 			_try_start_reload()
 	elif event is InputEventMouseButton:
-		# Ignore mouse events emulated from touch so mobile/web touch never fires or locks pointer.
-		if event.device == InputEvent.DEVICE_ID_EMULATION:
+		# Ignore emulated or synthetic mouse events when touch controls are active so screen taps never fire or jerk aim.
+		if event.device == InputEvent.DEVICE_ID_EMULATION or _touch_controls_enabled:
 			return
 		var is_fire_click: bool = (event.button_index == MOUSE_BUTTON_LEFT) or _is_macos_ctrl_fire_click(event)
 		if is_fire_click:
@@ -625,7 +625,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				_mouse_down = false
 				_is_dragging_look = false
 	elif event is InputEventMouseMotion:
-		if event.device == InputEvent.DEVICE_ID_EMULATION:
+		if event.device == InputEvent.DEVICE_ID_EMULATION or _touch_controls_enabled:
 			return
 		var sens: float = 0.00095 if is_scoped else 0.0022
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:

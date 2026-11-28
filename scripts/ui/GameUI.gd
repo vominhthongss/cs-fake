@@ -139,8 +139,8 @@ func _ready() -> void:
 	_build_gameover_modal()
 	_build_toast()
 	_wire_touch_controls()
-	_apply_localization()
 	_update_touch_controls_state()
+	_apply_localization()
 
 	if get_viewport() != null and not get_viewport().size_changed.is_connected(_apply_hud_layout):
 		get_viewport().size_changed.connect(_apply_hud_layout)
@@ -359,6 +359,8 @@ func _on_touch_input_detected() -> void:
 	if _touch_mode == "auto":
 		_update_touch_controls_state()
 		_apply_localization()
+		if not _last_hud.is_empty():
+			_on_hud_updated(_last_hud)
 
 func _update_touch_controls_state() -> void:
 	var want_touch: bool = false
@@ -1207,7 +1209,7 @@ func _apply_localization() -> void:
 	_radar_title_lbl.text = Localization.tr_key("radar")
 	_score_you_tag.text = Localization.tr_key("you")
 	_score_bot_tag.text = Localization.tr_key("bot")
-	_hud_buy_btn.text = Localization.tr_key("buy_btn")
+	_hud_buy_btn.text = Localization.tr_key("buy_btn_touch") if _touch_active else Localization.tr_key("buy_btn")
 	_mute_btn.text = Localization.tr_key("muted") if muted else Localization.tr_key("sfx_on")
 	_hud_pause_btn.text = Localization.tr_key("pause_btn")
 	_hp_tag_label.text = Localization.tr_key("hp")
@@ -1215,7 +1217,7 @@ func _apply_localization() -> void:
 
 	_buy_title_lbl.text = Localization.tr_key("armory_title")
 	_buy_sub_lbl.text = Localization.tr_key("armory_sub")
-	_buy_footer_lbl.text = Localization.tr_key("armory_footer")
+	_buy_footer_lbl.text = Localization.tr_key("armory_footer_touch") if _touch_active else Localization.tr_key("armory_footer")
 	_buy_ad_bonus_btn.text = Localization.tr_key("ad_bonus_cash_btn")
 	_buy_done_btn.text = Localization.tr_key("done")
 
@@ -1313,7 +1315,7 @@ func _on_hud_updated(hud: Dictionary) -> void:
 	_score_you_label.text = str(int(hud["player_score"]))
 	_round_label.text = Localization.tr_key("round_short") % [int(hud["round"]), int(hud["max_rounds"])]
 	_score_bot_label.text = str(int(hud["bot_score"]))
-	_cash_btn.text = "$%d [B]" % int(hud["cash"])
+	_cash_btn.text = ("$%d" % int(hud["cash"])) if _touch_active else ("$%d [B]" % int(hud["cash"]))
 
 	var banner_key: String = String(hud.get("round_banner_key", ""))
 	var banner_arg: int = int(hud.get("round_banner_arg", 0))
@@ -1351,7 +1353,7 @@ func _on_hud_updated(hud: Dictionary) -> void:
 		var item = hud_slots.get(s, null)
 		btn.disabled = (item == null)
 		var s_name: String = _localize_token(String(item["name"])) if item != null else "—"
-		btn.text = "[%d] %s" % [s, s_name]
+		btn.text = s_name if _touch_active else ("[%d] %s" % [s, s_name])
 		if s == active_s:
 			_style_button(btn, Color("#d97706"), Color("#f59e0b"), Color("#fcd34d"), Color("#0c0a09"))
 		else:
@@ -1428,7 +1430,7 @@ func _refresh_buy_menu(hud: Dictionary) -> void:
 
 		name_lbl.text = Localization.weapon_display_name(wid).to_upper()
 		price_lbl.text = Localization.tr_key("equipped") if owned else "$%d" % price
-		hint_lbl.text = Localization.weapon_role_hint(wid)
+		hint_lbl.text = Localization.tr_key("hint_awp_touch") if (_touch_active and wid == "awp") else Localization.weapon_role_hint(wid)
 		if spec["category"] == GameTypes.WeaponCategory.GRENADE:
 			stat_lbl.text = Localization.tr_key("stat_grenade") % int(round(float(spec["range"])))
 		else:

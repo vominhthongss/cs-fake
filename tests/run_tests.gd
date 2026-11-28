@@ -198,11 +198,12 @@ func _test_touch_joycon_math_and_controls() -> void:
 	var right := TouchControls.compute_stick_vector(Vector2(74.0, 0.0), 74.0, 0.12)
 	_assert(absf(right.x - 1.0) < 0.001 and absf(right.y) < 0.001, "Joystick rightward drag maps to +1 strafe right")
 
-	var diag := TouchControls.compute_stick_vector(Vector2(150.0, -150.0), 74.0, 0.12)
+	var diag := TouchControls.compute_stick_vector(Vector2(150.0, -150.0), 108.0, 0.12)
 	_assert(absf(diag.length() - 1.0) < 0.01, "Joystick diagonal magnitude clamps cleanly to 1.0")
 
-	var clamped := TouchControls.clamp_knob_offset(Vector2(200.0, 0.0), 74.0)
-	_assert(absf(clamped.length() - 74.0) < 0.01, "Joystick knob offset clamps to max radius")
+	var clamped := TouchControls.clamp_knob_offset(Vector2(200.0, 0.0), 108.0)
+	_assert(absf(clamped.length() - 108.0) < 0.01, "Joystick knob offset clamps to enlarged max radius")
+	_assert(TouchControls.BASE_JOYSTICK_RADIUS >= 100.0, "Enlarged mobile joystick radius is comfortable for phone screens")
 
 	# Touch mode persistence
 	Localization.set_touch_mode("on")
@@ -307,6 +308,79 @@ func _test_scene_lighting_models_and_match() -> void:
 		_assert(ui._pointer_hint.visible == false, "Desktop pointer lock hint hidden in touch mode")
 		_assert(ui._vit_panel.anchor_top == 0.0, "Vitals panel repositions clear of left joycon in touch mode")
 
+		# Verify desktop keyboard hints ([B], [Esc], [1]..[5], RMB) are hidden in mobile/touch mode
+		_assert(ui._hud_buy_btn.text.find("[B]") == -1, "HUD buy button hides [B] shortcut in touch mode")
+		_assert(ui._cash_btn.text.find("[B]") == -1, "HUD cash button hides [B] shortcut in touch mode")
+		_assert(ui._buy_footer_lbl.text.find("[B]") == -1 and ui._buy_footer_lbl.text.find("[Esc]") == -1, "Buy footer hides desktop key hints in touch mode")
+		_assert(ui._slot_buttons[1].text.find("[1]") == -1, "Weapon slot buttons hide [1]-[5] key prefixes in touch mode")
+		ui._refresh_buy_menu(main_node.get_hud_snapshot())
+		var awp_hint_touch: String = ui._buy_cards["awp"]["hint_lbl"].text
+		_assert(awp_hint_touch.find("RMB") == -1 and awp_hint_touch.find("Chuột phải") == -1, "AWP buy hint hides mouse button mention in touch mode")
+
+		# Verify enlarged mobile buttons & simultaneous multi-touch move + look without interference
+		var tc: TouchControls = ui._touch_controls
+		tc._recompute_layout()
+		_assert(float(tc._buttons["fire"]["radius"]) >= 68.0, "Fire touch button enlarged for mobile screens")
+		_assert(float(tc._buttons["jump"]["radius"]) >= 42.0, "Action touch buttons enlarged for mobile screens")
+
+		var mt_yaw_before: float = main_node.player_yaw
+		var mt_ammo_before: int = int(main_node.slots[1]["ammo_in_mag"])
+
+		# Finger 0 presses left joystick & drags forward
+		var f0_down := InputEventScreenTouch.new()
+		f0_down.index = 0
+		f0_down.position = Vector2(160.0, 560.0)
+		f0_down.pressed = true
+		tc._input(f0_down)
+		var f0_drag := InputEventScreenDrag.new()
+		f0_drag.index = 0
+		f0_drag.position = Vector2(160.0, 470.0)
+		tc._input(f0_drag)
+		_assert(tc._move_finger == 0 and main_node._virtual_move.y > 0.5, "Finger 0 drives left joystick movement")
+
+		# Finger 1 presses right look pad & drags horizontally while Finger 0 stays active
+		var f1_down := InputEventScreenTouch.new()
+		f1_down.index = 1
+		f1_down.position = Vector2(820.0, 340.0)
+		f1_down.pressed = true
+		tc._input(f1_down)
+		var f1_drag := InputEventScreenDrag.new()
+		f1_drag.index = 1
+		f1_drag.position = Vector2(880.0, 340.0)
+		f1_drag.relative = Vector2(-500.0, 400.0) # Deliberately bogus relative to confirm manual per-finger tracking
+		tc._input(f1_drag)
+		_assert(tc._move_finger == 0 and tc._look_finger == 1, "Simultaneous multi-touch tracks move (0) and look (1) independently")
+		_assert(main_node.player_yaw < mt_yaw_before - 0.15, "Right-side drag rotates camera using per-finger delta (ignoring bogus event.relative)")
+
+		# Finger 2 touching left side must NOT hijack look finger
+		var f2_left := InputEventScreenTouch.new()
+		f2_left.index = 2
+		f2_left.position = Vector2(300.0, 500.0)
+		f2_left.pressed = true
+		tc._input(f2_left)
+		_assert(tc._look_finger == 1 and tc._move_finger == 0, "Extra left-zone touch never hijacks move or look fingers")
+
+		# Synthetic mobile mouse click/motion must NOT fire or spin camera in touch mode
+		var synth_click := InputEventMouseButton.new()
+		synth_click.button_index = MOUSE_BUTTON_LEFT
+		synth_click.pressed = true
+		synth_click.position = Vector2(700.0, 300.0)
+		tc._input(synth_click)
+		main_node._unhandled_input(synth_click)
+		main_node.step_simulation(0.016)
+		_assert(main_node._mouse_down == false and int(main_node.slots[1]["ammo_in_mag"]) == mt_ammo_before, "Synthetic mouse click blocked during touch mode")
+
+		# Release fingers cleanly
+		var f0_up := InputEventScreenTouch.new()
+		f0_up.index = 0
+		f0_up.pressed = false
+		tc._input(f0_up)
+		var f1_up := InputEventScreenTouch.new()
+		f1_up.index = 1
+		f1_up.pressed = false
+		tc._input(f1_up)
+		_assert(tc._move_finger == -1 and tc._look_finger == -1 and main_node._virtual_move == Vector2.ZERO, "Releasing multi-touch fingers resets movement and look cleanly")
+
 		var start_pos: Vector3 = main_node.player_pos
 		var start_yaw: float = main_node.player_yaw
 		var ammo_before: int = int(main_node.slots[1]["ammo_in_mag"])
@@ -345,6 +419,9 @@ func _test_scene_lighting_models_and_match() -> void:
 		ui.set_touch_mode("off")
 		_assert(ui.is_touch_controls_active() == false, "GameUI disables touch joycon when mode is OFF")
 		_assert(ui._vit_panel.anchor_top == 1.0, "Vitals panel restores desktop bottom-left anchor")
+		_assert(ui._hud_buy_btn.text.find("[B]") >= 0, "HUD buy button restores [B] shortcut on desktop")
+		_assert(ui._cash_btn.text.find("[B]") >= 0, "HUD cash button restores [B] shortcut on desktop")
+		_assert(ui._slot_buttons[1].text.find("[1]") >= 0, "Weapon slot buttons restore [1]-[5] shortcuts on desktop")
 		ui.set_touch_mode("auto")
 
 	# Verify crouching before firing works (including macOS Ctrl+Click remapped to MOUSE_BUTTON_RIGHT)
