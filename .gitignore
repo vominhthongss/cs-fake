@@ -1,8 +1,11 @@
-node_modules/
+# Godot 4 ignores
+.godot/
+*.translation
+
+# Build outputs
 build/
 dist/
-coverage/
+
+# OS & logs
 .DS_Store
 *.log
-.env*
-!.env.example

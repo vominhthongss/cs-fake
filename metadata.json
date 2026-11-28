@@ -1,6 +1,0 @@
-{
-  "name": "CS-PROTOCOL // Tactical Bot FPS + Godot 4 GDScript",
-  "description": "3D CS:GO-inspired tactical FPS with full arsenal physics, smart utility-AI bots, and exportable Godot 4 GDScript weapon & AI systems.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
