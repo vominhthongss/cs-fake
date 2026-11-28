@@ -26,6 +26,7 @@ var _title_sub_lbl: Label
 var _title_diff_lbl: Label
 var _title_cnt_lbl: Label
 var _title_lang_lbl: Label
+var _title_touch_lbl: Label
 var _title_deploy_btn: Button
 var _title_info_lbl: Label
 var _title_privacy_btn: Button
@@ -36,12 +37,17 @@ var _diff_buttons: Dictionary = {}
 var _count_buttons: Dictionary = {}
 var _lang_buttons_title: Dictionary = {}
 var _lang_buttons_pause: Dictionary = {}
+var _touch_buttons_title: Dictionary = {}
+var _touch_buttons_pause: Dictionary = {}
 
 # HUD references
 var _crosshair: CrosshairControl
+var _touch_controls: TouchControls
+var _radar_panel: PanelContainer
 var _radar: RadarControl
 var _radar_title_lbl: Label
 var _bots_label: Label
+var _score_panel: PanelContainer
 var _score_you_tag: Label
 var _score_you_label: Label
 var _round_label: Label
@@ -50,20 +56,30 @@ var _score_bot_tag: Label
 var _cash_btn: Button
 var _banner_panel: PanelContainer
 var _banner_label: Label
+var _top_right_box: VBoxContainer
+var _util_row: HBoxContainer
 var _hud_buy_btn: Button
 var _mute_btn: Button
 var _hud_pause_btn: Button
 var _killfeed_box: VBoxContainer
+var _vit_panel: PanelContainer
 var _hp_label: Label
 var _hp_tag_label: Label
 var _armor_label: Label
 var _armor_tag_label: Label
+var _br_box: VBoxContainer
+var _slots_row: HBoxContainer
+var _ammo_panel: PanelContainer
 var _slot_buttons: Dictionary = {}
 var _weapon_name_label: Label
 var _reload_bar: ProgressBar
 var _ammo_label: Label
 var _pointer_hint: PanelContainer
 var _pointer_hint_lbl: Label
+
+var _touch_mode: String = "auto"
+var _touch_device_detected: bool = false
+var _touch_active: bool = false
 
 # Buy menu references
 var _buy_title_lbl: Label
@@ -79,6 +95,7 @@ var _buy_armor_card: Dictionary = {}
 var _pause_sub_lbl: Label
 var _pause_title_lbl: Label
 var _pause_lang_lbl: Label
+var _pause_touch_lbl: Label
 var _pause_score_title: Label
 var _pause_kills_title: Label
 var _pause_acc_title: Label
@@ -111,6 +128,8 @@ var _toast_timer: float = 0.0
 
 func _ready() -> void:
 	Localization.ensure_loaded()
+	_touch_mode = Localization.get_touch_mode()
+	_touch_device_detected = TouchControls.detect_touch_device()
 	_load_fonts()
 	game = get_parent() as FpsGameController
 	_build_title_screen()
@@ -119,7 +138,12 @@ func _ready() -> void:
 	_build_pause_modal()
 	_build_gameover_modal()
 	_build_toast()
+	_wire_touch_controls()
 	_apply_localization()
+	_update_touch_controls_state()
+
+	if get_viewport() != null and not get_viewport().size_changed.is_connected(_apply_hud_layout):
+		get_viewport().size_changed.connect(_apply_hud_layout)
 
 	var ad := _ad_manager()
 	if ad != null and not ad.status_message.is_connected(_show_toast):
@@ -268,6 +292,161 @@ func set_language(lang: String) -> void:
 	if not _last_hud.is_empty():
 		_on_hud_updated(_last_hud)
 
+func set_touch_mode(mode: String) -> void:
+	if not (mode in ["auto", "on", "off"]):
+		return
+	_touch_mode = mode
+	Localization.set_touch_mode(mode)
+	_update_touch_controls_state()
+	_refresh_title_buttons()
+	_apply_localization()
+	if not _last_hud.is_empty():
+		_on_hud_updated(_last_hud)
+
+func is_touch_controls_active() -> bool:
+	return _touch_active
+
+func _wire_touch_controls() -> void:
+	if _touch_controls == null:
+		return
+	_touch_controls.set_fonts(_font_bold if _font_bold != null else _font_regular)
+	var excluded: Array[Control] = []
+	if _score_panel != null:
+		excluded.append(_score_panel)
+	if _util_row != null:
+		excluded.append(_util_row)
+	if _slots_row != null:
+		excluded.append(_slots_row)
+	_touch_controls.set_excluded_controls(excluded)
+	_touch_controls.move_changed.connect(func(v: Vector2):
+		if game != null:
+			game.set_virtual_move(v)
+	)
+	_touch_controls.look_dragged.connect(func(delta_px: Vector2):
+		if game != null:
+			game.apply_virtual_look(delta_px)
+	)
+	_touch_controls.fire_changed.connect(func(pressed: bool):
+		if game != null:
+			game.set_virtual_fire(pressed)
+	)
+	_touch_controls.jump_pressed.connect(func():
+		if game != null:
+			game.trigger_virtual_jump()
+	)
+	_touch_controls.crouch_toggled.connect(func(active: bool):
+		if game != null:
+			game.set_virtual_crouch(active)
+	)
+	_touch_controls.reload_pressed.connect(func():
+		if game != null:
+			game.trigger_virtual_reload()
+	)
+	_touch_controls.scope_pressed.connect(func():
+		if game != null:
+			game.trigger_virtual_scope()
+	)
+	_touch_controls.grenade_pressed.connect(func(kind: String):
+		if game != null:
+			game.trigger_virtual_grenade(kind)
+	)
+	_touch_controls.touch_input_detected.connect(_on_touch_input_detected)
+
+func _on_touch_input_detected() -> void:
+	if _touch_device_detected:
+		return
+	_touch_device_detected = true
+	if _touch_mode == "auto":
+		_update_touch_controls_state()
+		_apply_localization()
+
+func _update_touch_controls_state() -> void:
+	var want_touch: bool = false
+	if _touch_mode == "on":
+		want_touch = true
+	elif _touch_mode == "auto":
+		want_touch = _touch_device_detected
+
+	_touch_active = want_touch
+	if game != null:
+		game.set_touch_controls_enabled(want_touch)
+
+	var show_overlay: bool = (
+		want_touch
+		and game != null
+		and game.phase == GameTypes.GamePhase.PLAYING
+		and not buy_open
+	)
+	if _touch_controls != null:
+		_touch_controls.set_controls_active(show_overlay)
+	_apply_hud_layout()
+
+func _apply_hud_layout() -> void:
+	if _vit_panel == null or _br_box == null or _radar_panel == null or _top_right_box == null:
+		return
+	var insets: Dictionary = _touch_controls.get_safe_insets() if _touch_controls != null else {"left": 0.0, "right": 0.0, "top": 0.0, "bottom": 0.0}
+	var safe_l: float = float(insets["left"])
+	var safe_r: float = float(insets["right"])
+	var safe_t: float = float(insets["top"])
+	var safe_b: float = float(insets["bottom"])
+
+	_radar_panel.position = Vector2(16.0 + safe_l, 16.0 + safe_t)
+	_top_right_box.offset_left = -340.0 - safe_r
+	_top_right_box.offset_right = -16.0 - safe_r
+	_top_right_box.offset_top = 16.0 + safe_t
+
+	if _touch_active:
+		# Move HP/Armor under Radar (top-left) so bottom-left stays completely clear for the Joycon.
+		_vit_panel.anchor_left = 0.0
+		_vit_panel.anchor_right = 0.0
+		_vit_panel.anchor_top = 0.0
+		_vit_panel.anchor_bottom = 0.0
+		_vit_panel.offset_left = 16.0 + safe_l
+		_vit_panel.offset_right = 216.0 + safe_l
+		_vit_panel.offset_top = 188.0 + safe_t
+		_vit_panel.offset_bottom = 240.0 + safe_t
+
+		# Move weapon slots & ammo to bottom-center so bottom-right stays clear for Fire/Jump/Crouch/Reload.
+		_br_box.anchor_left = 0.5
+		_br_box.anchor_right = 0.5
+		_br_box.anchor_top = 1.0
+		_br_box.anchor_bottom = 1.0
+		_br_box.offset_left = -230.0
+		_br_box.offset_right = 230.0
+		_br_box.offset_top = -114.0 - safe_b
+		_br_box.offset_bottom = -12.0 - safe_b
+		if _slots_row != null:
+			_slots_row.alignment = BoxContainer.ALIGNMENT_CENTER
+		if _ammo_panel != null:
+			_ammo_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	else:
+		# Desktop default HUD anchors
+		_vit_panel.anchor_left = 0.0
+		_vit_panel.anchor_right = 0.0
+		_vit_panel.anchor_top = 1.0
+		_vit_panel.anchor_bottom = 1.0
+		_vit_panel.offset_left = 16.0
+		_vit_panel.offset_right = 216.0
+		_vit_panel.offset_top = -72.0
+		_vit_panel.offset_bottom = -16.0
+
+		_br_box.anchor_left = 1.0
+		_br_box.anchor_right = 1.0
+		_br_box.anchor_top = 1.0
+		_br_box.anchor_bottom = 1.0
+		_br_box.offset_left = -460.0
+		_br_box.offset_right = -16.0
+		_br_box.offset_top = -114.0
+		_br_box.offset_bottom = -16.0
+		if _slots_row != null:
+			_slots_row.alignment = BoxContainer.ALIGNMENT_END
+		if _ammo_panel != null:
+			_ammo_panel.size_flags_horizontal = Control.SIZE_SHRINK_END
+
+	for s in _slot_buttons.keys():
+		var sb: Button = _slot_buttons[s]
+		sb.custom_minimum_size = Vector2(0, 34) if _touch_active else Vector2.ZERO
+
 func _build_title_screen() -> void:
 	_title_root = Control.new()
 	_title_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -373,6 +552,21 @@ func _build_title_screen() -> void:
 		cnt_row.add_child(btn)
 		_count_buttons[c_val] = btn
 
+	# Touch Joycon row
+	var touch_row := HBoxContainer.new()
+	touch_row.add_theme_constant_override("separation", 8)
+	setup_v.add_child(touch_row)
+	_title_touch_lbl = _make_label("", 13, Color("#fde68a"), true)
+	_title_touch_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	touch_row.add_child(_title_touch_lbl)
+
+	for m in ["auto", "on", "off"]:
+		var tbtn := Button.new()
+		var mode_val: String = m
+		tbtn.pressed.connect(func(): set_touch_mode(mode_val))
+		touch_row.add_child(tbtn)
+		_touch_buttons_title[mode_val] = tbtn
+
 	var spacer2 := Control.new()
 	spacer2.custom_minimum_size.y = 18
 	outer.add_child(spacer2)
@@ -446,6 +640,25 @@ func _refresh_title_buttons() -> void:
 			_style_button(btn, Color("#d97706"), Color("#f59e0b"), Color("#fbbf24"), Color("#0c0a09"))
 		else:
 			_style_button(btn, Color("#1c1917"), Color("#292524"), Color("#44403c"), Color("#d6d3d1"))
+	var touch_label_keys: Dictionary = {
+		"auto": "touch_mode_auto",
+		"on": "touch_mode_on",
+		"off": "touch_mode_off",
+	}
+	for m in _touch_buttons_title.keys():
+		var btn: Button = _touch_buttons_title[m]
+		btn.text = Localization.tr_key(String(touch_label_keys[m]))
+		if m == _touch_mode:
+			_style_button(btn, Color("#d97706"), Color("#f59e0b"), Color("#fbbf24"), Color("#0c0a09"))
+		else:
+			_style_button(btn, Color("#1c1917"), Color("#292524"), Color("#44403c"), Color("#d6d3d1"))
+	for m in _touch_buttons_pause.keys():
+		var btn: Button = _touch_buttons_pause[m]
+		btn.text = Localization.tr_key(String(touch_label_keys[m]))
+		if m == _touch_mode:
+			_style_button(btn, Color("#d97706"), Color("#f59e0b"), Color("#fbbf24"), Color("#0c0a09"))
+		else:
+			_style_button(btn, Color("#1c1917"), Color("#292524"), Color("#44403c"), Color("#d6d3d1"))
 
 func _build_hud() -> void:
 	_hud_root = Control.new()
@@ -456,16 +669,19 @@ func _build_hud() -> void:
 	_crosshair = CrosshairControl.new()
 	_hud_root.add_child(_crosshair)
 
+	_touch_controls = TouchControls.new()
+	_hud_root.add_child(_touch_controls)
+
 	# TOP-LEFT: Radar
-	var radar_panel := PanelContainer.new()
-	radar_panel.position = Vector2(16, 16)
-	radar_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	radar_panel.add_theme_stylebox_override("panel", _style_box(Color(0.07, 0.06, 0.05, 0.85), Color(0.96, 0.62, 0.04, 0.4), 4, 1, 6, 6))
-	_hud_root.add_child(radar_panel)
+	_radar_panel = PanelContainer.new()
+	_radar_panel.position = Vector2(16, 16)
+	_radar_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_radar_panel.add_theme_stylebox_override("panel", _style_box(Color(0.07, 0.06, 0.05, 0.85), Color(0.96, 0.62, 0.04, 0.4), 4, 1, 6, 6))
+	_hud_root.add_child(_radar_panel)
 
 	var radar_v := VBoxContainer.new()
 	radar_v.add_theme_constant_override("separation", 4)
-	radar_panel.add_child(radar_v)
+	_radar_panel.add_child(radar_v)
 	_radar = RadarControl.new()
 	radar_v.add_child(_radar)
 	var radar_foot := HBoxContainer.new()
@@ -488,14 +704,14 @@ func _build_hud() -> void:
 	top_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud_root.add_child(top_center)
 
-	var score_panel := PanelContainer.new()
-	score_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	score_panel.add_theme_stylebox_override("panel", _style_box(Color(0.07, 0.06, 0.05, 0.88), Color(0.96, 0.62, 0.04, 0.4), 4, 1, 16, 6))
-	top_center.add_child(score_panel)
+	_score_panel = PanelContainer.new()
+	_score_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_score_panel.add_theme_stylebox_override("panel", _style_box(Color(0.07, 0.06, 0.05, 0.88), Color(0.96, 0.62, 0.04, 0.4), 4, 1, 16, 6))
+	top_center.add_child(_score_panel)
 
 	var score_h := HBoxContainer.new()
 	score_h.add_theme_constant_override("separation", 14)
-	score_panel.add_child(score_h)
+	_score_panel.add_child(score_h)
 	_score_you_tag = _make_label("", 12, Color("#34d399"), true)
 	score_h.add_child(_score_you_tag)
 	_score_you_label = _make_label("0", 22, Color("#f5f5f4"), true)
@@ -521,56 +737,56 @@ func _build_hud() -> void:
 	top_center.add_child(_banner_panel)
 
 	# TOP-RIGHT: Utility buttons + Killfeed
-	var top_right := VBoxContainer.new()
-	top_right.anchor_left = 1.0
-	top_right.anchor_right = 1.0
-	top_right.offset_left = -340
-	top_right.offset_right = -16
-	top_right.offset_top = 16
-	top_right.add_theme_constant_override("separation", 8)
-	top_right.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hud_root.add_child(top_right)
+	_top_right_box = VBoxContainer.new()
+	_top_right_box.anchor_left = 1.0
+	_top_right_box.anchor_right = 1.0
+	_top_right_box.offset_left = -340
+	_top_right_box.offset_right = -16
+	_top_right_box.offset_top = 16
+	_top_right_box.add_theme_constant_override("separation", 8)
+	_top_right_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud_root.add_child(_top_right_box)
 
-	var util_row := HBoxContainer.new()
-	util_row.alignment = BoxContainer.ALIGNMENT_END
-	util_row.add_theme_constant_override("separation", 6)
-	top_right.add_child(util_row)
+	_util_row = HBoxContainer.new()
+	_util_row.alignment = BoxContainer.ALIGNMENT_END
+	_util_row.add_theme_constant_override("separation", 6)
+	_top_right_box.add_child(_util_row)
 
 	_hud_buy_btn = Button.new()
 	_style_button(_hud_buy_btn, Color(0.07, 0.06, 0.05, 0.88), Color("#292524"), Color(0.96, 0.62, 0.04, 0.4), Color("#fde68a"))
 	_hud_buy_btn.pressed.connect(func(): _set_buy_open(true))
-	util_row.add_child(_hud_buy_btn)
+	_util_row.add_child(_hud_buy_btn)
 
 	_mute_btn = Button.new()
 	_style_button(_mute_btn, Color(0.07, 0.06, 0.05, 0.88), Color("#292524"), Color(0.96, 0.62, 0.04, 0.4), Color("#fde68a"))
 	_mute_btn.pressed.connect(_toggle_mute)
-	util_row.add_child(_mute_btn)
+	_util_row.add_child(_mute_btn)
 
 	_hud_pause_btn = Button.new()
 	_style_button(_hud_pause_btn, Color(0.07, 0.06, 0.05, 0.88), Color("#292524"), Color(0.96, 0.62, 0.04, 0.4), Color("#fde68a"))
 	_hud_pause_btn.pressed.connect(func(): game.set_phase(GameTypes.GamePhase.PAUSED))
-	util_row.add_child(_hud_pause_btn)
+	_util_row.add_child(_hud_pause_btn)
 
 	_killfeed_box = VBoxContainer.new()
 	_killfeed_box.alignment = BoxContainer.ALIGNMENT_BEGIN
 	_killfeed_box.add_theme_constant_override("separation", 4)
 	_killfeed_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	top_right.add_child(_killfeed_box)
+	_top_right_box.add_child(_killfeed_box)
 
 	# BOTTOM-LEFT: HP & Armor
-	var vit_panel := PanelContainer.new()
-	vit_panel.anchor_top = 1.0
-	vit_panel.anchor_bottom = 1.0
-	vit_panel.offset_left = 16
-	vit_panel.offset_top = -72
-	vit_panel.offset_bottom = -16
-	vit_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vit_panel.add_theme_stylebox_override("panel", _style_box(Color(0.07, 0.06, 0.05, 0.88), Color(0.96, 0.62, 0.04, 0.4), 4, 1, 16, 8))
-	_hud_root.add_child(vit_panel)
+	_vit_panel = PanelContainer.new()
+	_vit_panel.anchor_top = 1.0
+	_vit_panel.anchor_bottom = 1.0
+	_vit_panel.offset_left = 16
+	_vit_panel.offset_top = -72
+	_vit_panel.offset_bottom = -16
+	_vit_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_vit_panel.add_theme_stylebox_override("panel", _style_box(Color(0.07, 0.06, 0.05, 0.88), Color(0.96, 0.62, 0.04, 0.4), 4, 1, 16, 8))
+	_hud_root.add_child(_vit_panel)
 
 	var vit_h := HBoxContainer.new()
 	vit_h.add_theme_constant_override("separation", 12)
-	vit_panel.add_child(vit_h)
+	_vit_panel.add_child(vit_h)
 	_hp_label = _make_label("100", 28, Color("#f5f5f4"), true)
 	vit_h.add_child(_hp_label)
 	_hp_tag_label = _make_label("", 12, Color("#a8a29e"), true)
@@ -583,42 +799,42 @@ func _build_hud() -> void:
 	vit_h.add_child(_armor_tag_label)
 
 	# BOTTOM-RIGHT: Slots & Ammo
-	var br_box := VBoxContainer.new()
-	br_box.anchor_left = 1.0
-	br_box.anchor_right = 1.0
-	br_box.anchor_top = 1.0
-	br_box.anchor_bottom = 1.0
-	br_box.offset_left = -460
-	br_box.offset_right = -16
-	br_box.offset_top = -114
-	br_box.offset_bottom = -16
-	br_box.alignment = BoxContainer.ALIGNMENT_END
-	br_box.add_theme_constant_override("separation", 6)
-	br_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hud_root.add_child(br_box)
+	_br_box = VBoxContainer.new()
+	_br_box.anchor_left = 1.0
+	_br_box.anchor_right = 1.0
+	_br_box.anchor_top = 1.0
+	_br_box.anchor_bottom = 1.0
+	_br_box.offset_left = -460
+	_br_box.offset_right = -16
+	_br_box.offset_top = -114
+	_br_box.offset_bottom = -16
+	_br_box.alignment = BoxContainer.ALIGNMENT_END
+	_br_box.add_theme_constant_override("separation", 6)
+	_br_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud_root.add_child(_br_box)
 
-	var slots_row := HBoxContainer.new()
-	slots_row.alignment = BoxContainer.ALIGNMENT_END
-	slots_row.add_theme_constant_override("separation", 6)
-	br_box.add_child(slots_row)
+	_slots_row = HBoxContainer.new()
+	_slots_row.alignment = BoxContainer.ALIGNMENT_END
+	_slots_row.add_theme_constant_override("separation", 6)
+	_br_box.add_child(_slots_row)
 	for s in [1, 2, 3, 4, 5]:
 		var sb := Button.new()
 		sb.text = "[%d]" % s
 		sb.add_theme_font_size_override("font_size", 11)
 		var slot_idx: int = s
 		sb.pressed.connect(func(): game.select_slot(slot_idx))
-		slots_row.add_child(sb)
+		_slots_row.add_child(sb)
 		_slot_buttons[s] = sb
 
-	var ammo_panel := PanelContainer.new()
-	ammo_panel.size_flags_horizontal = Control.SIZE_SHRINK_END
-	ammo_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ammo_panel.add_theme_stylebox_override("panel", _style_box(Color(0.07, 0.06, 0.05, 0.88), Color(0.96, 0.62, 0.04, 0.4), 4, 1, 16, 8))
-	br_box.add_child(ammo_panel)
+	_ammo_panel = PanelContainer.new()
+	_ammo_panel.size_flags_horizontal = Control.SIZE_SHRINK_END
+	_ammo_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ammo_panel.add_theme_stylebox_override("panel", _style_box(Color(0.07, 0.06, 0.05, 0.88), Color(0.96, 0.62, 0.04, 0.4), 4, 1, 16, 8))
+	_br_box.add_child(_ammo_panel)
 
 	var ammo_h := HBoxContainer.new()
 	ammo_h.add_theme_constant_override("separation", 16)
-	ammo_panel.add_child(ammo_h)
+	_ammo_panel.add_child(ammo_h)
 
 	var w_info := VBoxContainer.new()
 	w_info.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -822,6 +1038,19 @@ func _build_pause_modal() -> void:
 		lang_row.add_child(lbtn)
 		_lang_buttons_pause[code] = lbtn
 
+	var pause_touch_row := HBoxContainer.new()
+	pause_touch_row.add_theme_constant_override("separation", 6)
+	v.add_child(pause_touch_row)
+	_pause_touch_lbl = _make_label("", 12, Color("#fde68a"), true)
+	_pause_touch_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pause_touch_row.add_child(_pause_touch_lbl)
+	for m in ["auto", "on", "off"]:
+		var ptbtn := Button.new()
+		var mode_val: String = m
+		ptbtn.pressed.connect(func(): set_touch_mode(mode_val))
+		pause_touch_row.add_child(ptbtn)
+		_touch_buttons_pause[mode_val] = ptbtn
+
 	var stats := HBoxContainer.new()
 	stats.add_theme_constant_override("separation", 8)
 	v.add_child(stats)
@@ -957,11 +1186,23 @@ func _apply_localization() -> void:
 	_title_lang_lbl.text = Localization.tr_key("language_label")
 	_title_diff_lbl.text = Localization.tr_key("bot_ai_tier")
 	_title_cnt_lbl.text = Localization.tr_key("hostile_squad")
+	_title_touch_lbl.text = Localization.tr_key("touch_controls_label")
 	_title_deploy_btn.text = Localization.tr_key("deploy_match")
 	_title_info_lbl.text = Localization.tr_key("title_features")
 	_title_privacy_btn.text = Localization.tr_key("privacy_policy_btn")
 	_title_ad_privacy_btn.text = Localization.tr_key("ad_privacy_btn")
-	_title_hint_lbl.text = Localization.tr_key("controls_hint")
+	_title_hint_lbl.text = Localization.tr_key("controls_hint_touch") if _touch_active else Localization.tr_key("controls_hint")
+
+	if _touch_controls != null:
+		_touch_controls.set_labels(
+			Localization.tr_key("touch_fire"),
+			Localization.tr_key("touch_jump"),
+			Localization.tr_key("touch_crouch"),
+			Localization.tr_key("touch_reload"),
+			Localization.tr_key("touch_scope"),
+			Localization.tr_key("touch_he"),
+			Localization.tr_key("touch_flash")
+		)
 
 	_radar_title_lbl.text = Localization.tr_key("radar")
 	_score_you_tag.text = Localization.tr_key("you")
@@ -981,6 +1222,7 @@ func _apply_localization() -> void:
 	_pause_sub_lbl.text = Localization.tr_key("pause_sub")
 	_pause_title_lbl.text = Localization.tr_key("pause_title")
 	_pause_lang_lbl.text = Localization.tr_key("language_label")
+	_pause_touch_lbl.text = Localization.tr_key("touch_controls_label")
 	_pause_score_title.text = Localization.tr_key("score")
 	_pause_kills_title.text = Localization.tr_key("kills")
 	_pause_acc_title.text = Localization.tr_key("accuracy")
@@ -1025,6 +1267,7 @@ func _set_buy_open(open_state: bool) -> void:
 	buy_open = open_state
 	_buy_root.visible = open_state and game.phase == GameTypes.GamePhase.PLAYING
 	game.set_buy_menu_open(open_state)
+	_update_touch_controls_state()
 	if open_state and not _last_hud.is_empty():
 		_refresh_buy_menu(_last_hud)
 
@@ -1043,6 +1286,7 @@ func _on_phase_changed(p: GameTypes.GamePhase) -> void:
 	if p != GameTypes.GamePhase.PLAYING:
 		buy_open = false
 		_buy_root.visible = false
+	_update_touch_controls_state()
 
 	var ad := _ad_manager()
 	if ad != null:
@@ -1061,6 +1305,8 @@ func _on_phase_changed(p: GameTypes.GamePhase) -> void:
 func _on_hud_updated(hud: Dictionary) -> void:
 	_last_hud = hud
 	_crosshair.update_state(hud)
+	if _touch_controls != null:
+		_touch_controls.update_hud_state(hud)
 	_radar.update_state(hud["radar_blips"], float(hud["player_x"]), float(hud["player_z"]), float(hud["player_yaw"]))
 
 	_bots_label.text = Localization.tr_key("bots_alive") % [int(hud["bots_alive"]), int(hud["total_bots"])]
@@ -1124,7 +1370,7 @@ func _on_hud_updated(hud: Dictionary) -> void:
 	else:
 		_ammo_label.text = "x%d" % int(hud["flash_count"])
 
-	_pointer_hint.visible = not bool(hud["pointer_locked"]) and not buy_open
+	_pointer_hint.visible = not bool(hud["pointer_locked"]) and not buy_open and not _touch_active
 
 	if buy_open:
 		_refresh_buy_menu(hud)

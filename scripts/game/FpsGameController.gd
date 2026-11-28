@@ -82,6 +82,14 @@ var _mouse_down: bool = false
 var _mouse_just_pressed: bool = false
 var _is_dragging_look: bool = false
 var _pointer_locked: bool = false
+var _macos_checked: bool = false
+var _is_macos_cached: bool = false
+var _touch_controls_enabled: bool = false
+var _virtual_move: Vector2 = Vector2.ZERO
+var _virtual_fire_down: bool = false
+var _virtual_fire_just_pressed: bool = false
+var _virtual_crouch: bool = false
+var _virtual_jump_queued: bool = false
 
 # Scene nodes
 var camera: Camera3D
@@ -329,6 +337,8 @@ func _reset_round_state(banner_key: String, banner_arg: int = 0) -> void:
 	player_has_helmet = true
 	is_reloading = false
 	is_scoped = false
+	_fire_cooldown = 0.0
+	_hitstop_timer = 0.0
 	camera.fov = 75.0
 	_recoil_pitch = 0.0
 	_recoil_yaw = 0.0
@@ -338,6 +348,7 @@ func _reset_round_state(banner_key: String, banner_arg: int = 0) -> void:
 	_damage_flash_alpha = 0.0
 	_round_pending_state = "none"
 	_round_end_delay = 0.0
+	reset_virtual_inputs()
 
 	for s in [1, 2]:
 		var w = slots.get(s, null)
@@ -363,13 +374,14 @@ func set_phase(next_phase: GameTypes.GamePhase) -> void:
 	_mouse_down = false
 	_mouse_just_pressed = false
 	_is_dragging_look = false
+	reset_virtual_inputs()
 	if next_phase != GameTypes.GamePhase.PLAYING:
 		buy_menu_open = false
 		is_scoped = false
 		camera.fov = 75.0
 		release_pointer_lock()
 	else:
-		if not buy_menu_open:
+		if not buy_menu_open and not _touch_controls_enabled:
 			request_pointer_lock()
 	_update_visible_view_model()
 	emit_signal("phase_changed", next_phase)
@@ -380,13 +392,14 @@ func set_buy_menu_open(open_state: bool) -> void:
 	_mouse_down = false
 	_is_dragging_look = false
 	if open_state:
+		reset_virtual_inputs()
 		release_pointer_lock()
-	elif phase == GameTypes.GamePhase.PLAYING:
+	elif phase == GameTypes.GamePhase.PLAYING and not _touch_controls_enabled:
 		request_pointer_lock()
 	push_hud_snapshot()
 
 func request_pointer_lock() -> void:
-	if phase == GameTypes.GamePhase.PLAYING and not buy_menu_open and DisplayServer.get_name() != "headless":
+	if phase == GameTypes.GamePhase.PLAYING and not buy_menu_open and not _touch_controls_enabled and DisplayServer.get_name() != "headless":
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		_pointer_locked = true
 		push_hud_snapshot()
@@ -395,6 +408,103 @@ func release_pointer_lock() -> void:
 	if DisplayServer.get_name() != "headless":
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_pointer_locked = false
+
+func set_touch_controls_enabled(enabled: bool) -> void:
+	_touch_controls_enabled = enabled
+	if enabled:
+		_mouse_down = false
+		_mouse_just_pressed = false
+		_is_dragging_look = false
+		release_pointer_lock()
+	else:
+		reset_virtual_inputs()
+	push_hud_snapshot()
+
+func reset_virtual_inputs() -> void:
+	_virtual_move = Vector2.ZERO
+	_virtual_fire_down = false
+	_virtual_fire_just_pressed = false
+	_virtual_crouch = false
+	_virtual_jump_queued = false
+
+func set_virtual_move(move_vec: Vector2) -> void:
+	_virtual_move = move_vec.limit_length(1.0)
+
+func apply_virtual_look(delta_px: Vector2) -> void:
+	if phase != GameTypes.GamePhase.PLAYING or buy_menu_open:
+		return
+	var sens: float = 0.0020 if is_scoped else 0.0048
+	player_yaw -= delta_px.x * sens
+	player_pitch = clampf(player_pitch - delta_px.y * sens, -PI * 0.46, PI * 0.46)
+
+func set_virtual_fire(pressed: bool) -> void:
+	if phase != GameTypes.GamePhase.PLAYING or buy_menu_open:
+		_virtual_fire_down = false
+		_virtual_fire_just_pressed = false
+		return
+	if pressed and not _virtual_fire_down:
+		_virtual_fire_just_pressed = true
+	_virtual_fire_down = pressed
+
+func set_virtual_crouch(active: bool) -> void:
+	_virtual_crouch = active
+	push_hud_snapshot()
+
+func trigger_virtual_jump() -> void:
+	if phase == GameTypes.GamePhase.PLAYING and not buy_menu_open:
+		_virtual_jump_queued = true
+
+func trigger_virtual_reload() -> void:
+	if phase == GameTypes.GamePhase.PLAYING and not buy_menu_open:
+		_try_start_reload()
+
+func trigger_virtual_scope() -> void:
+	if phase == GameTypes.GamePhase.PLAYING and not buy_menu_open:
+		_toggle_scope()
+
+func trigger_virtual_grenade(kind: String) -> void:
+	if phase != GameTypes.GamePhase.PLAYING or buy_menu_open:
+		return
+	if kind == "he_grenade" and he_count > 0:
+		select_slot(4)
+		_throw_active_grenade("he_grenade")
+	elif kind == "flashbang" and flash_count > 0:
+		select_slot(5)
+		_throw_active_grenade("flashbang")
+
+func _is_player_crouching() -> bool:
+	return Input.is_action_pressed("crouch") or _virtual_crouch
+
+func _is_macos_platform() -> bool:
+	if _macos_checked:
+		return _is_macos_cached
+	_macos_checked = true
+	if OS.has_feature("macos") or OS.has_feature("web_macos"):
+		_is_macos_cached = true
+		return true
+	if OS.has_feature("web") and Engine.has_singleton("JavaScriptBridge"):
+		var res = JavaScriptBridge.eval(
+			"(function(){try{return /Mac/i.test(navigator.platform||'')||/Macintosh/i.test(navigator.userAgent||'');}catch(e){return false;}})()"
+		)
+		_is_macos_cached = bool(res)
+	return _is_macos_cached
+
+func _is_macos_ctrl_fire_click(event: InputEventMouseButton) -> bool:
+	# On macOS (native & web), holding Ctrl (crouch) + Left Click is remapped by the OS to Right Click.
+	return (
+		_is_macos_platform()
+		and event.button_index == MOUSE_BUTTON_RIGHT
+		and (event.ctrl_pressed or Input.is_key_pressed(KEY_CTRL))
+	)
+
+func _toggle_scope() -> void:
+	var spec: Dictionary = GameTypes.WEAPONS[get_active_weapon_id()]
+	if bool(spec["can_scope"]) and not is_reloading:
+		is_scoped = not is_scoped
+		camera.fov = 28.0 if is_scoped else 75.0
+		_play_click(1450.0)
+		_update_visible_view_model()
+		push_hud_snapshot()
 
 func _audio() -> TacticalAudioManager:
 	return get_node_or_null("/root/TacticalAudio") as TacticalAudioManager
@@ -493,25 +603,30 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif kc == KEY_R:
 			_try_start_reload()
 	elif event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT:
+		# Ignore mouse events emulated from touch so mobile/web touch never fires or locks pointer.
+		if event.device == InputEvent.DEVICE_ID_EMULATION:
+			return
+		var is_fire_click: bool = (event.button_index == MOUSE_BUTTON_LEFT) or _is_macos_ctrl_fire_click(event)
+		if is_fire_click:
 			if event.pressed:
 				_mouse_down = true
 				_mouse_just_pressed = true
 				_is_dragging_look = true
-				if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+				if not _touch_controls_enabled and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 					request_pointer_lock()
 			else:
 				_mouse_down = false
 				_is_dragging_look = false
-		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			var spec: Dictionary = GameTypes.WEAPONS[get_active_weapon_id()]
-			if bool(spec["can_scope"]) and not is_reloading:
-				is_scoped = not is_scoped
-				camera.fov = 28.0 if is_scoped else 75.0
-				_play_click(1450.0)
-				_update_visible_view_model()
-				push_hud_snapshot()
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			if event.pressed:
+				_toggle_scope()
+			elif _mouse_down and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+				# Guard against stuck fire if Ctrl was pressed mid-spray before releasing LMB on macOS.
+				_mouse_down = false
+				_is_dragging_look = false
 	elif event is InputEventMouseMotion:
+		if event.device == InputEvent.DEVICE_ID_EMULATION:
+			return
 		var sens: float = 0.00095 if is_scoped else 0.0022
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			player_yaw -= event.relative.x * sens
@@ -556,6 +671,7 @@ func step_simulation(dt: float) -> void:
 					_reset_round_state("banner_round_n", round_num)
 
 		_mouse_just_pressed = false
+		_virtual_fire_just_pressed = false
 		_hud_sync_timer += dt
 		if _hud_sync_timer >= 0.05:
 			_hud_sync_timer = 0.0
@@ -639,7 +755,7 @@ func _try_fire_weapon() -> void:
 	if _audio() != null:
 		_audio().play_gunshot(wid, 1.0)
 
-	var crouching: bool = Input.is_action_pressed("crouch")
+	var crouching: bool = _is_player_crouching()
 	var horiz_speed: float = Vector2(player_vel.x, player_vel.z).length()
 	var spread: float = GameRules.compute_dynamic_spread(wid, horiz_speed, player_grounded, crouching, is_scoped, _recoil_bloom)
 
@@ -1016,10 +1132,14 @@ func _update_player(dt: float) -> void:
 	if Input.is_key_pressed(KEY_DOWN):
 		player_pitch = clampf(player_pitch - 1.5 * dt, -1.4, 1.4)
 
-	var fwd_in: float = (1.0 if Input.is_action_pressed("move_forward") else 0.0) - (1.0 if Input.is_action_pressed("move_back") else 0.0)
-	var str_in: float = (1.0 if Input.is_action_pressed("move_right") else 0.0) - (1.0 if Input.is_action_pressed("move_left") else 0.0)
-	var crouching: bool = Input.is_action_pressed("crouch")
-	var walking: bool = Input.is_action_pressed("walk")
+	var kb_fwd: float = (1.0 if Input.is_action_pressed("move_forward") else 0.0) - (1.0 if Input.is_action_pressed("move_back") else 0.0)
+	var kb_str: float = (1.0 if Input.is_action_pressed("move_right") else 0.0) - (1.0 if Input.is_action_pressed("move_left") else 0.0)
+	var fwd_in: float = clampf(kb_fwd + _virtual_move.y, -1.0, 1.0)
+	var str_in: float = clampf(kb_str + _virtual_move.x, -1.0, 1.0)
+	var crouching: bool = _is_player_crouching()
+	var analog_mag: float = _virtual_move.length()
+	var soft_touch_walk: bool = (analog_mag > 0.01 and analog_mag < 0.55 and absf(kb_fwd) < 0.01 and absf(kb_str) < 0.01)
+	var walking: bool = Input.is_action_pressed("walk") or soft_touch_walk
 
 	var fwd_x: float = -sin(player_yaw)
 	var fwd_z: float = -cos(player_yaw)
@@ -1029,13 +1149,14 @@ func _update_player(dt: float) -> void:
 	var wish_x: float = fwd_x * fwd_in + right_x * str_in
 	var wish_z: float = fwd_z * fwd_in + right_z * str_in
 	var wish_len: float = Vector2(wish_x, wish_z).length()
+	var wish_scale: float = minf(1.0, wish_len)
 	if wish_len > 0.001:
 		wish_x /= wish_len
 		wish_z /= wish_len
 
 	var spec: Dictionary = GameTypes.WEAPONS[get_active_weapon_id()]
 	var base_speed: float = 3.2 if crouching else (3.8 if walking else 6.4)
-	var max_speed: float = base_speed * float(spec["move_speed_multiplier"]) * (0.55 if is_scoped else 1.0)
+	var max_speed: float = base_speed * float(spec["move_speed_multiplier"]) * (0.55 if is_scoped else 1.0) * (wish_scale if wish_len > 0.001 else 1.0)
 
 	if player_grounded:
 		var h_spd: float = Vector2(player_vel.x, player_vel.z).length()
@@ -1058,9 +1179,10 @@ func _update_player(dt: float) -> void:
 			player_vel.x += wish_x * accel
 			player_vel.z += wish_z * accel
 
-	if Input.is_action_pressed("jump") and player_grounded:
+	if (Input.is_action_pressed("jump") or _virtual_jump_queued) and player_grounded:
 		player_vel.y = 5.6
 		player_grounded = false
+	_virtual_jump_queued = false
 
 	player_vel.y -= 17.5 * dt
 
@@ -1103,7 +1225,9 @@ func _update_player(dt: float) -> void:
 		if _reload_timer <= 0.0:
 			_finish_reload()
 	else:
-		var want_fire: bool = _mouse_down if bool(spec["automatic"]) else _mouse_just_pressed
+		var fire_down: bool = _mouse_down or _virtual_fire_down
+		var fire_just: bool = _mouse_just_pressed or _virtual_fire_just_pressed
+		var want_fire: bool = fire_down if bool(spec["automatic"]) else fire_just
 		if want_fire and _fire_cooldown <= 0.0:
 			_try_fire_weapon()
 
@@ -1483,7 +1607,7 @@ func get_hud_snapshot() -> Dictionary:
 	var spec: Dictionary = GameTypes.WEAPONS[active_id]
 	var h_speed: float = Vector2(player_vel.x, player_vel.z).length()
 	var spread: float = GameRules.compute_dynamic_spread(
-		active_id, h_speed, player_grounded, Input.is_action_pressed("crouch"), is_scoped, _recoil_bloom
+		active_id, h_speed, player_grounded, _is_player_crouching(), is_scoped, _recoil_bloom
 	)
 
 	var radar_blips: Array[Dictionary] = []
@@ -1547,6 +1671,8 @@ func get_hud_snapshot() -> Dictionary:
 		"player_z": player_pos.z,
 		"player_yaw": player_yaw,
 		"pointer_locked": _pointer_locked,
+		"is_crouching": _is_player_crouching(),
+		"touch_controls_enabled": _touch_controls_enabled,
 		"is_victory": player_score >= bot_score,
 		"difficulty": difficulty,
 		"bot_count": bot_count,

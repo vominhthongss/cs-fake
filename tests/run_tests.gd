@@ -31,6 +31,7 @@ func _process(_delta: float) -> bool:
 	_test_localization_vi_en()
 	_test_weapon_icons()
 	_test_admob_and_release_config()
+	_test_touch_joycon_math_and_controls()
 	_test_scene_lighting_models_and_match()
 
 	print("=== RESULTS: %d passed, %d failed ===" % [_passed, _failed])
@@ -184,6 +185,32 @@ func _test_admob_and_release_config() -> void:
 	_assert(presets_txt.find('platform="Android"') >= 0 and presets_txt.find('package/unique_name="com.vominhthongss.csprotocol"') >= 0, "Android Google Play preset configured")
 	_assert(presets_txt.find('platform="iOS"') >= 0 and presets_txt.find('application/bundle_identifier="com.vominhthongss.csprotocol"') >= 0, "iOS App Store preset configured")
 	_assert(presets_txt.find('platform="Web"') >= 0 and presets_txt.find('export_path="build/web/index.html"') >= 0, "Web export preset configured")
+	_assert(presets_txt.find("touch-action: none") >= 0, "Web export preset disables browser touch scrolling/zooming")
+
+func _test_touch_joycon_math_and_controls() -> void:
+	# Deadzone & directional mapping tests
+	var dead := TouchControls.compute_stick_vector(Vector2(5.0, -4.0), 74.0, 0.12)
+	_assert(dead == Vector2.ZERO, "Joystick deadzone ignores micro-jitter")
+
+	var up := TouchControls.compute_stick_vector(Vector2(0.0, -74.0), 74.0, 0.12)
+	_assert(absf(up.x) < 0.001 and absf(up.y - 1.0) < 0.001, "Joystick upward drag maps to +1 forward")
+
+	var right := TouchControls.compute_stick_vector(Vector2(74.0, 0.0), 74.0, 0.12)
+	_assert(absf(right.x - 1.0) < 0.001 and absf(right.y) < 0.001, "Joystick rightward drag maps to +1 strafe right")
+
+	var diag := TouchControls.compute_stick_vector(Vector2(150.0, -150.0), 74.0, 0.12)
+	_assert(absf(diag.length() - 1.0) < 0.01, "Joystick diagonal magnitude clamps cleanly to 1.0")
+
+	var clamped := TouchControls.clamp_knob_offset(Vector2(200.0, 0.0), 74.0)
+	_assert(absf(clamped.length() - 74.0) < 0.01, "Joystick knob offset clamps to max radius")
+
+	# Touch mode persistence
+	Localization.set_touch_mode("on")
+	_assert(Localization.get_touch_mode() == "on", "Localization persists touch_mode = on")
+	Localization.set_touch_mode("off")
+	_assert(Localization.get_touch_mode() == "off", "Localization persists touch_mode = off")
+	Localization.set_touch_mode("auto")
+	_assert(Localization.get_touch_mode() == "auto", "Localization restores touch_mode = auto")
 
 func _count_box_meshes(node: Node) -> int:
 	var count: int = 0
@@ -271,6 +298,99 @@ func _test_scene_lighting_models_and_match() -> void:
 	var snap := main_node.get_hud_snapshot()
 	_assert(int(snap["bots_alive"]) == 5, "HUD snapshot reports 5 bots alive")
 	_assert(String(snap["active_weapon_id"]) == "ak47", "HUD snapshot reports AK-47 active")
+
+	# Verify Touch Joycon integration & HUD layout adaptation
+	if ui != null:
+		ui.set_touch_mode("on")
+		_assert(ui.is_touch_controls_active() == true, "GameUI activates touch joycon when mode is ON")
+		_assert(ui._touch_controls != null and ui._touch_controls.visible == true, "TouchControls overlay visible during PLAYING")
+		_assert(ui._pointer_hint.visible == false, "Desktop pointer lock hint hidden in touch mode")
+		_assert(ui._vit_panel.anchor_top == 0.0, "Vitals panel repositions clear of left joycon in touch mode")
+
+		var start_pos: Vector3 = main_node.player_pos
+		var start_yaw: float = main_node.player_yaw
+		var ammo_before: int = int(main_node.slots[1]["ammo_in_mag"])
+
+		main_node.set_virtual_move(Vector2(0.0, 1.0))
+		main_node.apply_virtual_look(Vector2(50.0, -20.0))
+		main_node.set_virtual_crouch(true)
+		main_node.set_virtual_fire(true)
+		for _tstep in range(8):
+			main_node.step_simulation(0.016)
+		main_node.set_virtual_fire(false)
+
+		_assert(main_node.player_pos.distance_to(start_pos) > 0.05, "Virtual joycon movement moves player")
+		_assert(absf(main_node.player_yaw - start_yaw) > 0.05, "Virtual touch drag rotates player yaw")
+		_assert(int(main_node.slots[1]["ammo_in_mag"]) < ammo_before, "Virtual fire button fires weapon")
+		_assert(bool(main_node.get_hud_snapshot()["is_crouching"]) == true, "Virtual crouch updates HUD snapshot")
+
+		main_node.trigger_virtual_reload()
+		_assert(main_node.is_reloading == true, "Virtual reload starts reloading")
+
+		main_node.set_virtual_crouch(false)
+		main_node.trigger_virtual_jump()
+		main_node.step_simulation(0.016)
+		_assert(main_node.player_grounded == false, "Virtual jump launches player off ground")
+
+		var he_before: int = main_node.he_count
+		main_node.trigger_virtual_grenade("he_grenade")
+		_assert(main_node.he_count == he_before - 1, "Virtual grenade button throws HE grenade")
+
+		ui._set_buy_open(true)
+		_assert(ui._touch_controls.visible == false, "TouchControls hides when Buy Menu opens")
+		_assert(main_node._virtual_move == Vector2.ZERO, "Buy Menu resets virtual joycon move input")
+		ui._set_buy_open(false)
+		_assert(ui._touch_controls.visible == true, "TouchControls re-appears when Buy Menu closes")
+
+		ui.set_touch_mode("off")
+		_assert(ui.is_touch_controls_active() == false, "GameUI disables touch joycon when mode is OFF")
+		_assert(ui._vit_panel.anchor_top == 1.0, "Vitals panel restores desktop bottom-left anchor")
+		ui.set_touch_mode("auto")
+
+	# Verify crouching before firing works (including macOS Ctrl+Click remapped to MOUSE_BUTTON_RIGHT)
+	main_node.start_new_match(GameTypes.BotDifficulty.TACTICAL, 3)
+	main_node.set_touch_controls_enabled(false)
+	main_node._macos_checked = true
+	main_node._is_macos_cached = true
+	main_node.set_virtual_crouch(true)
+	var ammo_crouch_before: int = int(main_node.slots[1]["ammo_in_mag"])
+
+	var ctrl_click_down := InputEventMouseButton.new()
+	ctrl_click_down.button_index = MOUSE_BUTTON_RIGHT
+	ctrl_click_down.ctrl_pressed = true
+	ctrl_click_down.pressed = true
+	main_node._unhandled_input(ctrl_click_down)
+	main_node.step_simulation(0.016)
+	_assert(main_node._mouse_down == true, "macOS Ctrl+Click while crouched sets _mouse_down = true")
+	_assert(int(main_node.slots[1]["ammo_in_mag"]) < ammo_crouch_before, "Crouching with Ctrl before clicking fires weapon")
+
+	var ctrl_click_up := InputEventMouseButton.new()
+	ctrl_click_up.button_index = MOUSE_BUTTON_RIGHT
+	ctrl_click_up.ctrl_pressed = true
+	ctrl_click_up.pressed = false
+	main_node._unhandled_input(ctrl_click_up)
+	_assert(main_node._mouse_down == false, "Releasing macOS Ctrl+Click clears _mouse_down cleanly")
+
+	# Verify genuine Right-Click without Ctrl still scopes AWP while crouched (e.g., via C key)
+	main_node.player_cash = 5000
+	main_node.buy_item("awp")
+	var rmb_scope := InputEventMouseButton.new()
+	rmb_scope.button_index = MOUSE_BUTTON_RIGHT
+	rmb_scope.ctrl_pressed = false
+	rmb_scope.pressed = true
+	main_node._unhandled_input(rmb_scope)
+	_assert(main_node.is_scoped == true, "Right-click without Ctrl while crouched still toggles AWP scope")
+
+	# Verify no stuck _mouse_down if LMB was pressed then released via RMB
+	var lmb_down := InputEventMouseButton.new()
+	lmb_down.button_index = MOUSE_BUTTON_LEFT
+	lmb_down.pressed = true
+	main_node._unhandled_input(lmb_down)
+	var rmb_up := InputEventMouseButton.new()
+	rmb_up.button_index = MOUSE_BUTTON_RIGHT
+	rmb_up.pressed = false
+	main_node._unhandled_input(rmb_up)
+	_assert(main_node._mouse_down == false, "Releasing RMB after LMB-then-Ctrl does not leave _mouse_down stuck")
 
 	main_node.free()
 	ad_mgr.free()

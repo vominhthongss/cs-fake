@@ -6,6 +6,7 @@ extends RefCounted
 const SETTINGS_PATH: String = "user://settings.cfg"
 
 static var current_lang: String = "vi"
+static var touch_mode: String = "auto"
 static var _loaded: bool = false
 
 const STRINGS: Dictionary = {
@@ -95,6 +96,18 @@ const STRINGS: Dictionary = {
 		"ad_privacy_btn": "AD PRIVACY OPTIONS",
 		"ad_privacy_mobile_only": "Ad privacy options are only available on mobile",
 		"ad_privacy_failed": "Unable to open ad privacy options right now",
+		"touch_controls_label": "TOUCH JOYCON",
+		"touch_mode_auto": "AUTO",
+		"touch_mode_on": "ON",
+		"touch_mode_off": "OFF",
+		"touch_fire": "FIRE",
+		"touch_jump": "JUMP",
+		"touch_crouch": "CROUCH",
+		"touch_reload": "RELOAD",
+		"touch_scope": "SCOPE",
+		"touch_he": "HE",
+		"touch_flash": "FLASH",
+		"controls_hint_touch": "Left Joycon Move · Right Drag Aim · Hold Fire & Drag to Track · Tap 1-5 Weapons · Tap BUY/PAUSE",
 	},
 	"vi": {
 		"title_sub": "KHU VỰC SA MẠC // TÁC CHIẾN BOT · BẢN GODOT 4",
@@ -182,6 +195,18 @@ const STRINGS: Dictionary = {
 		"ad_privacy_btn": "TÙY CHỌN QUẢNG CÁO",
 		"ad_privacy_mobile_only": "Tùy chọn quảng cáo chỉ khả dụng trên điện thoại",
 		"ad_privacy_failed": "Không mở được tùy chọn quảng cáo lúc này",
+		"touch_controls_label": "TAY CẦM CẢM ỨNG",
+		"touch_mode_auto": "TỰ ĐỘNG",
+		"touch_mode_on": "BẬT",
+		"touch_mode_off": "TẮT",
+		"touch_fire": "BẮN",
+		"touch_jump": "NHẢY",
+		"touch_crouch": "NGỒI",
+		"touch_reload": "NẠP",
+		"touch_scope": "NGẮM",
+		"touch_he": "NỔ",
+		"touch_flash": "CHÓI",
+		"controls_hint_touch": "Joycon trái Di chuyển · Vuốt phải Ngắm · Giữ Bắn + Kéo để lia tâm · Chạm 1-5 Đổi súng",
 	},
 }
 
@@ -194,19 +219,39 @@ static func ensure_loaded() -> void:
 		var saved: String = String(cfg.get_value("ui", "language", current_lang))
 		if STRINGS.has(saved):
 			current_lang = saved
+		var saved_touch: String = String(cfg.get_value("input", "touch_mode", touch_mode))
+		if saved_touch in ["auto", "on", "off"]:
+			touch_mode = saved_touch
 
 static func set_language(lang: String) -> void:
 	if not STRINGS.has(lang):
 		return
+	ensure_loaded()
 	current_lang = lang
-	_loaded = true
 	var cfg := ConfigFile.new()
+	cfg.load(SETTINGS_PATH)
 	cfg.set_value("ui", "language", lang)
+	cfg.set_value("input", "touch_mode", touch_mode)
 	cfg.save(SETTINGS_PATH)
 
 static func get_language() -> String:
 	ensure_loaded()
 	return current_lang
+
+static func set_touch_mode(mode: String) -> void:
+	if not (mode in ["auto", "on", "off"]):
+		return
+	ensure_loaded()
+	touch_mode = mode
+	var cfg := ConfigFile.new()
+	cfg.load(SETTINGS_PATH)
+	cfg.set_value("ui", "language", current_lang)
+	cfg.set_value("input", "touch_mode", mode)
+	cfg.save(SETTINGS_PATH)
+
+static func get_touch_mode() -> String:
+	ensure_loaded()
+	return touch_mode
 
 static func tr_key(key: String) -> String:
 	ensure_loaded()
