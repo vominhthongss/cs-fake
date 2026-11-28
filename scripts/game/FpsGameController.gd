@@ -459,6 +459,13 @@ func buy_item(item: String) -> Dictionary:
 	push_hud_snapshot()
 	return {"ok": true, "cost": check["cost"], "reason": ""}
 
+func grant_ad_bonus_cash(amount: int = 1500) -> void:
+	if amount <= 0:
+		return
+	player_cash = mini(16000, player_cash + amount)
+	_play_click(1420.0)
+	push_hud_snapshot()
+
 func _unhandled_input(event: InputEvent) -> void:
 	if phase != GameTypes.GamePhase.PLAYING or buy_menu_open:
 		return

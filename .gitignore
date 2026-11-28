@@ -2,6 +2,11 @@
 .godot/
 *.translation
 
+# Android build template & local keystores
+android/build/
+*.keystore
+*.jks
+
 # Build outputs
 build/
 dist/

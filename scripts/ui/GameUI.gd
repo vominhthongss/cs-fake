@@ -21,12 +21,16 @@ var _pause_root: Control
 var _gameover_root: Control
 
 # Title controls
+var _title_margin: MarginContainer
 var _title_sub_lbl: Label
 var _title_diff_lbl: Label
 var _title_cnt_lbl: Label
 var _title_lang_lbl: Label
 var _title_deploy_btn: Button
 var _title_info_lbl: Label
+var _title_privacy_btn: Button
+var _title_ad_privacy_btn: Button
+var _title_meta_lbl: Label
 var _title_hint_lbl: Label
 var _diff_buttons: Dictionary = {}
 var _count_buttons: Dictionary = {}
@@ -66,6 +70,7 @@ var _buy_title_lbl: Label
 var _buy_sub_lbl: Label
 var _buy_cash_label: Label
 var _buy_footer_lbl: Label
+var _buy_ad_bonus_btn: Button
 var _buy_done_btn: Button
 var _buy_cards: Dictionary = {}
 var _buy_armor_card: Dictionary = {}
@@ -83,6 +88,8 @@ var _pause_acc_val: Label
 var _pause_resume_btn: Button
 var _pause_restart_btn: Button
 var _pause_menu_btn: Button
+var _pause_privacy_btn: Button
+var _pause_ad_privacy_btn: Button
 
 var _go_subtitle: Label
 var _go_title: Label
@@ -98,6 +105,10 @@ var _go_dmg_val: Label
 var _go_replay_btn: Button
 var _go_menu_btn: Button
 
+var _toast_panel: PanelContainer
+var _toast_label: Label
+var _toast_timer: float = 0.0
+
 func _ready() -> void:
 	Localization.ensure_loaded()
 	_load_fonts()
@@ -107,13 +118,73 @@ func _ready() -> void:
 	_build_buy_menu()
 	_build_pause_modal()
 	_build_gameover_modal()
+	_build_toast()
 	_apply_localization()
+
+	var ad := _ad_manager()
+	if ad != null and not ad.status_message.is_connected(_show_toast):
+		ad.status_message.connect(_show_toast)
 
 	if game != null:
 		game.hud_updated.connect(_on_hud_updated)
 		game.phase_changed.connect(_on_phase_changed)
 		_on_phase_changed(game.phase)
 		_on_hud_updated(game.get_hud_snapshot())
+
+func _process(delta: float) -> void:
+	if _toast_timer > 0.0:
+		_toast_timer -= delta
+		if _toast_timer <= 0.0 and _toast_panel != null:
+			_toast_panel.visible = false
+
+func _ad_manager() -> AdManagerNode:
+	return get_node_or_null("/root/AdManager") as AdManagerNode
+
+func _build_toast() -> void:
+	_toast_panel = PanelContainer.new()
+	_toast_panel.anchor_left = 0.5
+	_toast_panel.anchor_right = 0.5
+	_toast_panel.anchor_top = 0.0
+	_toast_panel.anchor_bottom = 0.0
+	_toast_panel.offset_left = -260
+	_toast_panel.offset_right = 260
+	_toast_panel.offset_top = 68
+	_toast_panel.offset_bottom = 104
+	_toast_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_toast_panel.add_theme_stylebox_override("panel", _style_box(Color(0.08, 0.065, 0.05, 0.95), Color("#f59e0b"), 6, 1, 16, 8))
+	_toast_label = _make_label("", 13, Color("#fde68a"), true)
+	_toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_toast_panel.add_child(_toast_label)
+	_toast_panel.visible = false
+	add_child(_toast_panel)
+
+func _show_toast(msg: String) -> void:
+	if _toast_panel == null or _toast_label == null or msg.is_empty():
+		return
+	_toast_label.text = msg
+	_toast_panel.visible = true
+	_toast_timer = 2.8
+
+func _open_privacy_policy() -> void:
+	OS.shell_open(AppInfo.privacy_url())
+
+func _open_ad_privacy_options() -> void:
+	var ad := _ad_manager()
+	if ad != null:
+		ad.show_privacy_options()
+
+func _request_ad_bonus_cash() -> void:
+	var ad := _ad_manager()
+	if ad == null:
+		_show_toast(Localization.tr_key("ad_not_ready"))
+		return
+	ad.show_rewarded("buy_bonus_cash", _on_ad_bonus_cash_reward)
+
+func _on_ad_bonus_cash_reward(earned: bool) -> void:
+	if not earned or game == null:
+		return
+	game.grant_ad_bonus_cash(1500)
+	_show_toast(Localization.tr_key("ad_bonus_granted"))
 
 func _load_fonts() -> void:
 	if ResourceLoader.exists("res://assets/fonts/ui_font.ttf"):
@@ -208,17 +279,17 @@ func _build_title_screen() -> void:
 	scrim.offset_right = 590
 	_title_root.add_child(scrim)
 
-	var margin := MarginContainer.new()
-	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	margin.add_theme_constant_override("margin_left", 48)
-	margin.add_theme_constant_override("margin_top", 44)
-	margin.add_theme_constant_override("margin_right", 48)
-	margin.add_theme_constant_override("margin_bottom", 30)
-	_title_root.add_child(margin)
+	_title_margin = MarginContainer.new()
+	_title_margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_title_margin.add_theme_constant_override("margin_left", 48)
+	_title_margin.add_theme_constant_override("margin_top", 44)
+	_title_margin.add_theme_constant_override("margin_right", 48)
+	_title_margin.add_theme_constant_override("margin_bottom", 30)
+	_title_root.add_child(_title_margin)
 
 	var outer := VBoxContainer.new()
 	outer.alignment = BoxContainer.ALIGNMENT_BEGIN
-	margin.add_child(outer)
+	_title_margin.add_child(outer)
 
 	var header_box := VBoxContainer.new()
 	header_box.add_theme_constant_override("separation", 6)
@@ -319,6 +390,26 @@ func _build_title_screen() -> void:
 	outer.add_child(spacer3)
 	_title_info_lbl = _make_label("", 13, Color("#d6d3d1"))
 	outer.add_child(_title_info_lbl)
+
+	var legal_row := HBoxContainer.new()
+	legal_row.add_theme_constant_override("separation", 8)
+	outer.add_child(legal_row)
+
+	_title_privacy_btn = Button.new()
+	_title_privacy_btn.add_theme_font_size_override("font_size", 11)
+	_style_button(_title_privacy_btn, Color("#1c1917"), Color("#292524"), Color("#44403c"), Color("#d6d3d1"), false)
+	_title_privacy_btn.pressed.connect(_open_privacy_policy)
+	legal_row.add_child(_title_privacy_btn)
+
+	_title_ad_privacy_btn = Button.new()
+	_title_ad_privacy_btn.add_theme_font_size_override("font_size", 11)
+	_style_button(_title_ad_privacy_btn, Color("#1c1917"), Color("#292524"), Color("#44403c"), Color("#fde68a"), false)
+	_title_ad_privacy_btn.pressed.connect(_open_ad_privacy_options)
+	_title_ad_privacy_btn.visible = false
+	legal_row.add_child(_title_ad_privacy_btn)
+
+	_title_meta_lbl = _make_label("v%s · %s" % [AppInfo.version(), AppInfo.developer()], 11, Color("#a8a29e"))
+	legal_row.add_child(_title_meta_lbl)
 
 	var flex := Control.new()
 	flex.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -677,10 +768,17 @@ func _build_buy_menu() -> void:
 	grid.add_child(_buy_armor_card["button"])
 
 	var foot := HBoxContainer.new()
+	foot.add_theme_constant_override("separation", 10)
 	v.add_child(foot)
 	_buy_footer_lbl = _make_label("", 12, Color("#a8a29e"))
 	_buy_footer_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	foot.add_child(_buy_footer_lbl)
+
+	_buy_ad_bonus_btn = Button.new()
+	_style_button(_buy_ad_bonus_btn, Color(0.06, 0.25, 0.16, 0.95), Color(0.08, 0.34, 0.22, 0.98), Color("#34d399"), Color("#d1fae5"))
+	_buy_ad_bonus_btn.pressed.connect(_request_ad_bonus_cash)
+	foot.add_child(_buy_ad_bonus_btn)
+
 	_buy_done_btn = Button.new()
 	_style_button(_buy_done_btn, Color("#d97706"), Color("#f59e0b"), Color("#fbbf24"), Color("#0c0a09"))
 	_buy_done_btn.pressed.connect(func(): _set_buy_open(false))
@@ -755,6 +853,25 @@ func _build_pause_modal() -> void:
 	_pause_menu_btn.pressed.connect(func(): game.set_phase(GameTypes.GamePhase.TITLE))
 	v.add_child(_pause_menu_btn)
 
+	var pause_legal := HBoxContainer.new()
+	pause_legal.add_theme_constant_override("separation", 8)
+	v.add_child(pause_legal)
+
+	_pause_privacy_btn = Button.new()
+	_pause_privacy_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pause_privacy_btn.add_theme_font_size_override("font_size", 11)
+	_style_button(_pause_privacy_btn, Color("#1c1917"), Color("#292524"), Color("#44403c"), Color("#d6d3d1"), false)
+	_pause_privacy_btn.pressed.connect(_open_privacy_policy)
+	pause_legal.add_child(_pause_privacy_btn)
+
+	_pause_ad_privacy_btn = Button.new()
+	_pause_ad_privacy_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pause_ad_privacy_btn.add_theme_font_size_override("font_size", 11)
+	_style_button(_pause_ad_privacy_btn, Color("#1c1917"), Color("#292524"), Color("#44403c"), Color("#fde68a"), false)
+	_pause_ad_privacy_btn.pressed.connect(_open_ad_privacy_options)
+	_pause_ad_privacy_btn.visible = false
+	pause_legal.add_child(_pause_ad_privacy_btn)
+
 func _build_gameover_modal() -> void:
 	_gameover_root = ColorRect.new()
 	_gameover_root.color = Color(0.04, 0.035, 0.03, 0.82)
@@ -803,13 +920,23 @@ func _build_gameover_modal() -> void:
 	_go_replay_btn = Button.new()
 	_go_replay_btn.custom_minimum_size.y = 42
 	_style_button(_go_replay_btn, Color("#d97706"), Color("#f59e0b"), Color("#fbbf24"), Color("#0c0a09"))
-	_go_replay_btn.pressed.connect(_start_match)
+	_go_replay_btn.pressed.connect(func():
+		var ad := _ad_manager()
+		if ad != null:
+			ad.maybe_show_interstitial("match_replay")
+		_start_match()
+	)
 	v.add_child(_go_replay_btn)
 
 	_go_menu_btn = Button.new()
 	_go_menu_btn.custom_minimum_size.y = 38
 	_style_button(_go_menu_btn, Color("#1c1917"), Color("#292524"), Color("#44403c"), Color("#d6d3d1"))
-	_go_menu_btn.pressed.connect(func(): game.set_phase(GameTypes.GamePhase.TITLE))
+	_go_menu_btn.pressed.connect(func():
+		var ad := _ad_manager()
+		if ad != null:
+			ad.maybe_show_interstitial("match_menu")
+		game.set_phase(GameTypes.GamePhase.TITLE)
+	)
 	v.add_child(_go_menu_btn)
 
 func _add_stat_box(parent: Control, title: String, val: String, val_col: Color) -> Dictionary:
@@ -832,6 +959,8 @@ func _apply_localization() -> void:
 	_title_cnt_lbl.text = Localization.tr_key("hostile_squad")
 	_title_deploy_btn.text = Localization.tr_key("deploy_match")
 	_title_info_lbl.text = Localization.tr_key("title_features")
+	_title_privacy_btn.text = Localization.tr_key("privacy_policy_btn")
+	_title_ad_privacy_btn.text = Localization.tr_key("ad_privacy_btn")
 	_title_hint_lbl.text = Localization.tr_key("controls_hint")
 
 	_radar_title_lbl.text = Localization.tr_key("radar")
@@ -846,6 +975,7 @@ func _apply_localization() -> void:
 	_buy_title_lbl.text = Localization.tr_key("armory_title")
 	_buy_sub_lbl.text = Localization.tr_key("armory_sub")
 	_buy_footer_lbl.text = Localization.tr_key("armory_footer")
+	_buy_ad_bonus_btn.text = Localization.tr_key("ad_bonus_cash_btn")
 	_buy_done_btn.text = Localization.tr_key("done")
 
 	_pause_sub_lbl.text = Localization.tr_key("pause_sub")
@@ -857,6 +987,8 @@ func _apply_localization() -> void:
 	_pause_resume_btn.text = Localization.tr_key("resume_match")
 	_pause_restart_btn.text = Localization.tr_key("restart_match")
 	_pause_menu_btn.text = Localization.tr_key("main_menu")
+	_pause_privacy_btn.text = Localization.tr_key("privacy_policy_btn")
+	_pause_ad_privacy_btn.text = Localization.tr_key("ad_privacy_btn")
 
 	_go_kills_title.text = Localization.tr_key("eliminations")
 	_go_hs_title.text = Localization.tr_key("headshots")
@@ -911,6 +1043,20 @@ func _on_phase_changed(p: GameTypes.GamePhase) -> void:
 	if p != GameTypes.GamePhase.PLAYING:
 		buy_open = false
 		_buy_root.visible = false
+
+	var ad := _ad_manager()
+	if ad != null:
+		var show_gdpr: bool = ad.privacy_options_required()
+		if _title_ad_privacy_btn != null:
+			_title_ad_privacy_btn.visible = show_gdpr
+		if _pause_ad_privacy_btn != null:
+			_pause_ad_privacy_btn.visible = show_gdpr
+		if p == GameTypes.GamePhase.TITLE:
+			ad.show_banner()
+			if _title_margin != null:
+				_title_margin.add_theme_constant_override("margin_bottom", 30 + int(ceilf(ad.banner_reserved_height())))
+		else:
+			ad.hide_banner()
 
 func _on_hud_updated(hud: Dictionary) -> void:
 	_last_hud = hud

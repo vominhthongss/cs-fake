@@ -8,6 +8,7 @@ const SAMPLE_RATE: int = 22050
 const POOL_SIZE: int = 16
 
 var muted: bool = false
+var _ad_muted: bool = false
 var _players: Array[AudioStreamPlayer] = []
 var _cursor: int = 0
 var _streams: Dictionary = {}
@@ -28,8 +29,14 @@ func set_muted(val: bool) -> void:
 		for p in _players:
 			p.stop()
 
+func set_ad_mute(val: bool) -> void:
+	_ad_muted = val
+	if _ad_muted:
+		for p in _players:
+			p.stop()
+
 func _play_stream(key: String, volume_linear: float = 1.0, pitch_scale: float = 1.0) -> void:
-	if muted or not _streams.has(key):
+	if muted or _ad_muted or not _streams.has(key):
 		return
 	var p: AudioStreamPlayer = _players[_cursor]
 	_cursor = (_cursor + 1) % POOL_SIZE

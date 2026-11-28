@@ -30,6 +30,7 @@ func _process(_delta: float) -> bool:
 	_test_bot_utility_ai()
 	_test_localization_vi_en()
 	_test_weapon_icons()
+	_test_admob_and_release_config()
 	_test_scene_lighting_models_and_match()
 
 	print("=== RESULTS: %d passed, %d failed ===" % [_passed, _failed])
@@ -143,6 +144,47 @@ func _test_weapon_icons() -> void:
 		var tex := WeaponIcons.get_icon(item_id)
 		_assert(tex != null and tex.get_width() >= 100 and tex.get_height() >= 40, "Weapon icon rendered for " + item_id)
 
+func _test_admob_and_release_config() -> void:
+	_assert(AppInfo.developer() == "vominhthongss", "AppInfo reads developer from project.godot")
+	_assert(AppInfo.website() == "https://vominhthongss.github.io", "AppInfo reads website from project.godot")
+	_assert(AppInfo.privacy_url() == "https://vominhthongss.github.io/cs-protocol/policy.html", "AppInfo builds privacy URL cleanly")
+	_assert(AppInfo.version() == "1.0.0", "AppInfo reads app version")
+
+	_assert(AdManagerNode.PROD_IDS.has("Android") and AdManagerNode.PROD_IDS.has("iOS"), "ad_manager defines Android & iOS PROD_IDS")
+	_assert(String(AdManagerNode.PROD_IDS["Android"]["banner"]).begins_with("ca-app-pub-"), "Android banner unit ID configured")
+	_assert(String(AdManagerNode.PROD_IDS["iOS"]["rewarded"]).begins_with("ca-app-pub-"), "iOS rewarded unit ID configured")
+	_assert(AdManagerNode.use_test_ids() == true, "Debug build uses Google test Ad Unit IDs safely")
+
+	# Verify snake_case lofi-garden naming + no leftover .env/AdConfig
+	_assert(FileAccess.file_exists("res://scripts/autoload/ad_manager.gd"), "ad_manager.gd uses lofi-garden naming")
+	_assert(FileAccess.file_exists("res://scripts/util/app_info.gd"), "app_info.gd uses lofi-garden naming")
+	_assert(not FileAccess.file_exists("res://.env") and not FileAccess.file_exists("res://scripts/autoload/AdConfig.gd"), "No .env or AdConfig.gd left behind")
+
+	# Verify baked PNG icons & store assets exist with required formats
+	var required_files: Array[String] = [
+		"res://assets/icons/icon_1024.png",
+		"res://assets/icons/icon_192.png",
+		"res://assets/icons/adaptive_foreground_432.png",
+		"res://assets/icons/adaptive_background_432.png",
+		"res://assets/icons/adaptive_monochrome_432.png",
+		"res://assets/icons/ios_appstore_1024.png",
+		"res://assets/icons/logo_splash.png",
+		"res://store/play_store_icon_512.png",
+		"res://store/feature_graphic_1024x500.png",
+		"res://store/app-ads.txt",
+		"res://addons/admob/plugin.cfg",
+	]
+	for fp in required_files:
+		_assert(FileAccess.file_exists(fp), "Release asset exists: " + fp)
+
+	var ios_icon := Image.load_from_file(ProjectSettings.globalize_path("res://assets/icons/ios_appstore_1024.png"))
+	_assert(ios_icon != null and ios_icon.get_width() == 1024 and ios_icon.get_height() == 1024 and ios_icon.get_format() == Image.FORMAT_RGB8, "iOS App Store icon is 1024x1024 RGB8 (no alpha)")
+
+	var presets_txt: String = FileAccess.get_file_as_string("res://export_presets.cfg")
+	_assert(presets_txt.find('platform="Android"') >= 0 and presets_txt.find('package/unique_name="com.vominhthongss.csprotocol"') >= 0, "Android Google Play preset configured")
+	_assert(presets_txt.find('platform="iOS"') >= 0 and presets_txt.find('application/bundle_identifier="com.vominhthongss.csprotocol"') >= 0, "iOS App Store preset configured")
+	_assert(presets_txt.find('platform="Web"') >= 0 and presets_txt.find('export_path="build/web/index.html"') >= 0, "Web export preset configured")
+
 func _count_box_meshes(node: Node) -> int:
 	var count: int = 0
 	if node is MeshInstance3D and node.mesh is BoxMesh:
@@ -156,6 +198,15 @@ func _test_scene_lighting_models_and_match() -> void:
 	audio_mgr.name = "TacticalAudio"
 	root.add_child(audio_mgr)
 	_assert(audio_mgr._streams.size() == 16, "All 16 procedural WAV sound effects synthesized")
+	audio_mgr.set_ad_mute(true)
+	_assert(audio_mgr._ad_muted == true, "TacticalAudio supports ad mute")
+	audio_mgr.set_ad_mute(false)
+
+	var ad_mgr := AdManagerNode.new()
+	ad_mgr.name = "AdManager"
+	root.add_child(ad_mgr)
+	_assert(ad_mgr.ads_enabled_for_user() == true, "AdManager active by default")
+	_assert(ad_mgr.maybe_show_interstitial("test") == false, "Interstitial safely skipped on headless/desktop")
 
 	var packed: PackedScene = load("res://scenes/Main.tscn")
 	_assert(packed != null, "Main.tscn loads cleanly")
@@ -193,10 +244,13 @@ func _test_scene_lighting_models_and_match() -> void:
 	_assert(ui != null, "GameUI attached")
 	if ui != null:
 		_assert(ui._buy_cards.size() == GameTypes.BUYABLE_WEAPON_IDS.size(), "Buy menu has visual card for every buyable weapon")
+		_assert(ui._buy_ad_bonus_btn != null and ui._title_privacy_btn != null and ui._pause_privacy_btn != null, "Ad bonus and privacy buttons wired into GameUI")
 		ui.set_language("en")
 		_assert(ui._buy_title_lbl.text == "TACTICAL ARMORY", "GameUI live-switches to English")
+		_assert(ui._buy_ad_bonus_btn.text.find("+$1500") >= 0, "Ad bonus button localized in English")
 		ui.set_language("vi")
 		_assert(ui._buy_title_lbl.text.find("VŨ KHÍ") >= 0, "GameUI live-switches to Vietnamese")
+		_assert(ui._title_privacy_btn.text.find("BẢO MẬT") >= 0, "Privacy button localized in Vietnamese")
 
 	main_node.start_new_match(GameTypes.BotDifficulty.ELITE, 5)
 	_assert(main_node.phase == GameTypes.GamePhase.PLAYING, "Match transitions to PLAYING")
@@ -207,6 +261,10 @@ func _test_scene_lighting_models_and_match() -> void:
 	_assert(main_node.player_cash == 800, "Cash deducted to $800 after AK-47 purchase")
 	_assert(main_node.get_active_weapon_id() == "ak47", "Active weapon switched to AK-47")
 
+	if ui != null:
+		ui._request_ad_bonus_cash()
+		_assert(main_node.player_cash == 2300, "Rewarded ad bonus grants +$1500 cash")
+
 	for _step in range(10):
 		main_node.step_simulation(0.016)
 
@@ -215,4 +273,5 @@ func _test_scene_lighting_models_and_match() -> void:
 	_assert(String(snap["active_weapon_id"]) == "ak47", "HUD snapshot reports AK-47 active")
 
 	main_node.free()
+	ad_mgr.free()
 	audio_mgr.free()
